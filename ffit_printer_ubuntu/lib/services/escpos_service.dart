@@ -176,7 +176,7 @@ Uint8List buildTestReceipt({int paperWidthMm = 58}) {
     ..text('All Systems Functional!')
     ..text('')
     ..add(EscPos.cp437)
-    ..rawText('Powered by- Raj ')
+    ..rawText('Powered by- FFIT.IO ')
     ..byte(0x03)   // ♥ in CP437 — same as Android footer
     ..byte(0x0A)
     ..add(EscPos.feed3)

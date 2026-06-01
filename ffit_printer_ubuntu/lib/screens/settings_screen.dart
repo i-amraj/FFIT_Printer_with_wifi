@@ -252,7 +252,7 @@ class SettingsScreen extends StatelessWidget {
           children: [
             _InfoRow('App',     'FFit Printer Driver'),
             _InfoRow('Version', '1.0.0'),
-            _InfoRow('By',      'Raj'),
+            _InfoRow('By',      'FFIT.IO'),
             _InfoRow('Support', 'USB · Network · Bluetooth'),
             _InfoRow('ESC/POS', '58mm thermal only'),
           ],
