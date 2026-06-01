@@ -141,4 +141,4 @@ sudo systemctl start bluetooth
 
 ---
 
-*Developed with ❤️ by [FFIT.IO](https://ffit.io) — Premium ESC/POS Printing Solutions*
+*Developed with ❤️ by Raj — Premium ESC/POS Printing Solutions*

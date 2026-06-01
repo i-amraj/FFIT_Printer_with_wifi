@@ -25,6 +25,19 @@ INSTALL_DIR="/usr/local/bin"
 DESKTOP_DIR="/usr/share/applications"
 CONFIG_DIR="/etc/ffit"
 
+# Standalone bundle detection
+if [ -d "$SCRIPT_DIR/bundle" ]; then
+    APP_BUNDLE="$SCRIPT_DIR/bundle"
+    BACKEND_SRC="$SCRIPT_DIR/ffit"
+    PPD_SRC="$SCRIPT_DIR/pos58.ppd"
+    ICON_SRC="$SCRIPT_DIR/icon.png"
+else
+    APP_BUNDLE="$SCRIPT_DIR/../ffit_printer_ubuntu/build/linux/x64/release/bundle"
+    BACKEND_SRC="$SCRIPT_DIR/../cups_backend/ffit"
+    PPD_SRC="$SCRIPT_DIR/pos58.ppd"
+    ICON_SRC="$SCRIPT_DIR/icon.png"
+fi
+
 echo ""
 echo -e "${BOLD}${BLUE}╔══════════════════════════════════════════════════╗${NC}"
 echo -e "${BOLD}${BLUE}║     FFit Thermal Printer Driver — Installer      ║${NC}"
@@ -72,13 +85,13 @@ echo -e "  ${GREEN}✓ Dependencies OK${NC}"
 # ── Step 2: Install CUPS backend ─────────────────────────────────────────────
 echo -e "${YELLOW}[2/6] Installing CUPS backend...${NC}"
 
-cp "$SCRIPT_DIR/../cups_backend/ffit" "$CUPS_BACKEND_DIR/$BACKEND_NAME"
+cp "$BACKEND_SRC" "$CUPS_BACKEND_DIR/$BACKEND_NAME"
 chmod 755 "$CUPS_BACKEND_DIR/$BACKEND_NAME"
 chown root:root "$CUPS_BACKEND_DIR/$BACKEND_NAME"
 
 # Copy 58mm PPD file for paper size formatting
 mkdir -p /usr/share/ppd/custom
-cp "$SCRIPT_DIR/pos58.ppd" "/usr/share/ppd/custom/pos58.ppd"
+cp "$PPD_SRC" "/usr/share/ppd/custom/pos58.ppd"
 chmod 644 "/usr/share/ppd/custom/pos58.ppd"
 
 # Create system configuration folder for system-wide/CUPS access
@@ -90,13 +103,11 @@ echo -e "  ${GREEN}✓ CUPS backend and PPD installed${NC}"
 # ── Step 3: Install Flutter app ───────────────────────────────────────────────
 echo -e "${YELLOW}[3/6] Installing Flutter desktop app...${NC}"
 
-APP_BUNDLE="$SCRIPT_DIR/../ffit_printer_ubuntu/build/linux/x64/release/bundle"
-
 if [ -d "$APP_BUNDLE" ]; then
     # Release build available
     mkdir -p "/opt/ffit-printer"
     cp -r "$APP_BUNDLE/." "/opt/ffit-printer/"
-    cp "$SCRIPT_DIR/icon.png" "/opt/ffit-printer/icon.png"
+    cp "$ICON_SRC" "/opt/ffit-printer/icon.png"
     chmod 644 "/opt/ffit-printer/icon.png"
     ln -sf "/opt/ffit-printer/ffit_printer_ubuntu" "$INSTALL_DIR/$APP_BIN"
     echo -e "  ${GREEN}✓ Flutter app installed: /opt/ffit-printer${NC}"

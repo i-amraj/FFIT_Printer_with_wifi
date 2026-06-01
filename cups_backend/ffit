@@ -475,7 +475,7 @@ def build_footer() -> bytes:
     esc += b"\n"                      # blank line
     esc += b"-" * 32 + b"\n"         # separator
     esc += bytes([0x1B, 0x45, 0x01]) # BOLD ON
-    esc += b"Powered by- FFIT.IO\n"
+    esc += b"Powered by- Raj\n"
     esc += bytes([0x1B, 0x45, 0x00]) # BOLD OFF
     esc += bytes([0x1B, 0x64, 0x03]) # FEED 3
     esc += bytes([0x1D, 0x56, 0x00]) # CUT
