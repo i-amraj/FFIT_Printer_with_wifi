@@ -1,0 +1,24 @@
+# Flutter build and tool output
+ffit_printer_ubuntu/build/
+ffit_printer_ubuntu/.dart_tool/
+ffit_printer_ubuntu/.flutter-plugins
+ffit_printer_ubuntu/.flutter-plugins-dependencies
+ffit_printer_ubuntu/.packages
+
+# OS/IDEs
+.DS_Store
+.idea/
+.vscode/
+
+# Python cache files
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Backups
+*~
+*.swp
+
+# Obsolete template directory
+ffit-thermal-driver/

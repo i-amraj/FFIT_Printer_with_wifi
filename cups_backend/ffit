@@ -1,0 +1,486 @@
+#!/usr/bin/env python3
+"""
+FFit Thermal Printer — CUPS Backend
+=====================================
+Install path: /usr/lib/cups/backend/ffit
+
+CUPS calls this script as:
+  ffit <job-id> <user> <title> <copies> <options> [filename]
+
+Steps:
+  1. Read PDF from filename (or stdin)
+  2. Load printer config from ~/.config/ffit/printer.json
+  3. Render each PDF page to PNG (via pdftoppm)
+  4. Convert PNG → ESC/POS raster bytes
+  5. Send bytes to printer (USB / Network / Bluetooth)
+
+Requires:
+  pip3 install Pillow
+  apt install poppler-utils cups python3-pil
+"""
+
+import sys
+import os
+import json
+import socket
+import struct
+import subprocess
+import tempfile
+import logging
+
+# ── Setup logging to CUPS log ────────────────────────────────────────────────
+logging.basicConfig(
+    level=logging.DEBUG,
+    format="%(levelname)s: FFit Backend: %(message)s",
+    handlers=[logging.StreamHandler(sys.stderr)]
+)
+log = logging.getLogger("ffit")
+
+CONFIG_PATH = os.path.expanduser("~/.config/ffit/printer.json")
+BACKEND_NAME = "ffit"
+
+
+def main():
+    """CUPS backend entry point."""
+    args = sys.argv
+
+    # CUPS discovery mode: called with 0 args — print supported URI schemes
+    if len(args) == 1:
+        print(f'network {BACKEND_NAME}:// "Unknown" "FFit Thermal Printer" "MFG:FFit;MDL:Thermal;"')
+        sys.exit(0)
+
+    # Normal print job: 5 or 6 args
+    if len(args) not in (6, 7):
+        log.error(f"Wrong arg count: {args}")
+        sys.exit(1)
+
+    job_id   = args[1]
+    user     = args[2]
+    title    = args[3]
+    copies   = int(args[4]) if args[4].isdigit() else 1
+    options  = args[5]
+    filename = args[6] if len(args) == 7 else None
+
+    log.info(f"Job {job_id}: '{title}' by {user}, copies={copies}")
+
+    # ── Load config ──────────────────────────────────────────────────────────
+    config = load_config(user)
+    if config is None:
+        log.error("No printer config. Open FFit Printer app and connect a printer.")
+        sys.exit(1)
+
+    log.info(f"Using: {config['name']} ({config['type']} @ {_addr(config)})")
+
+    # ── Get PDF data ─────────────────────────────────────────────────────────
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp_path = tmp.name
+        if filename:
+            import shutil
+            shutil.copy2(filename, tmp_path)
+        else:
+            tmp.write(sys.stdin.buffer.read())
+
+    # Check if input file is actually a PDF
+    is_pdf = False
+    try:
+        with open(tmp_path, "rb") as f:
+            header = f.read(5)
+            if header == b"%PDF-":
+                is_pdf = True
+    except Exception as e:
+        log.error(f"Error checking file header: {e}")
+
+    try:
+        # ── Connect to printer ───────────────────────────────────────────────
+        conn = make_connection(config)
+        if not conn.connect():
+            log.error("Cannot connect to printer")
+            sys.exit(1)
+
+        paper_mm    = 58
+        width_px    = 384
+
+        if is_pdf:
+            for copy_n in range(copies):
+                log.error(f"Printing PDF copy {copy_n + 1}/{copies}")
+                print_pdf(tmp_path, conn, width_px, paper_mm)
+        else:
+            log.error("Input is raw printer commands. Sending directly...")
+            with open(tmp_path, "rb") as f:
+                raw_bytes = f.read()
+            conn.send(raw_bytes)
+
+        # ── Footer (same as Android sendCompanyFooter) ───────────────────────
+        conn.send(build_footer())
+        conn.disconnect()
+
+        log.info("Print job complete!")
+
+    except Exception as e:
+        log.exception(f"Unhandled backend printing error: {e}")
+        sys.exit(1)
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
+
+
+# ─── Config ───────────────────────────────────────────────────────────────────
+
+def load_config(user=None):
+    """Load printer.json written by FFit Flutter app."""
+    import getpass
+    log.error(f"load_config called. Current Process User: {getpass.getuser()} (UID: {os.getuid()}, GID: {os.getgid()}), target user: {user}")
+    
+    paths = []
+    if user:
+        paths.append(f"/home/{user}/.config/ffit/printer.json")
+    paths.append(CONFIG_PATH)
+    paths.append("/etc/ffit/printer.json")
+
+    for path in paths:
+        log.error(f"Checking config path: {path}")
+        # Note: os.path.exists can return False if parent directory permissions deny access
+        try:
+            exists = os.path.exists(path)
+            log.error(f"Path {path} exists check: {exists}")
+            if exists:
+                with open(path) as f:
+                    data = json.load(f)
+                    log.error(f"Successfully loaded config from: {path}")
+                    return data
+        except Exception as e:
+            log.error(f"Error checking/reading {path}: {e}")
+            
+    # Try backup search in all /home/*/.config/ffit/printer.json
+    log.error("Trying backup search in all home directories...")
+    try:
+        import glob
+        for p in glob.glob("/home/*/.config/ffit/printer.json"):
+            try:
+                log.error(f"Backup trying path: {p}")
+                with open(p) as f:
+                    data = json.load(f)
+                    log.error(f"Successfully loaded config from backup path: {p}")
+                    return data
+            except Exception as e:
+                log.error(f"Backup path {p} failed: {e}")
+    except Exception as e:
+        log.error(f"Backup search failed: {e}")
+
+    return None
+
+def _addr(cfg):
+    t = cfg.get("type", "")
+    if t == "network":
+        return f"{cfg.get('host')}:{cfg.get('port', 9100)}"
+    if t == "bluetooth":
+        return cfg.get("mac_address", "?")
+    return cfg.get("device_path") or cfg.get("cups_name") or "USB"
+
+
+# ─── Connections ──────────────────────────────────────────────────────────────
+
+class BaseConn:
+    def connect(self): raise NotImplementedError
+    def send(self, data: bytes) -> bool: raise NotImplementedError
+    def disconnect(self): pass
+
+
+class UsbConn(BaseConn):
+    def __init__(self, cfg):
+        self.path = cfg.get("device_path")
+        self.cups = cfg.get("cups_name")
+
+    def connect(self):
+        if self.path and os.path.exists(self.path):
+            try:
+                # Test open and close immediately
+                with open(self.path, "wb") as f:
+                    pass
+                return True
+            except PermissionError:
+                log.error(f"Permission denied: {self.path}. Run: sudo usermod -aG lp $USER")
+                return False
+            except Exception as e:
+                log.error(f"USB connect failed: {e}")
+                return False
+        if self.cups:
+            return True
+        return False
+
+    def send(self, data: bytes) -> bool:
+        if self.path and os.path.exists(self.path):
+            t_path = None
+            try:
+                # Write to a temp file first
+                with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as t:
+                    t.write(data)
+                    t_path = t.name
+                
+                # Use shell redirection (cat > device) to let kernel handle flow control/USB endpoints natively
+                r = subprocess.run(
+                    f"cat {t_path} > {self.path}",
+                    shell=True,
+                    capture_output=True,
+                    timeout=30
+                )
+                return r.returncode == 0
+            except Exception as e:
+                import traceback
+                log.error(f"USB write error: {e}\n{traceback.format_exc()}"); return False
+            finally:
+                if t_path and os.path.exists(t_path):
+                    try: os.unlink(t_path)
+                    except: pass
+        if self.cups:
+            with tempfile.NamedTemporaryFile(suffix=".bin", delete=False) as t:
+                t.write(data); t_path = t.name
+            try:
+                r = subprocess.run(["lp", "-d", self.cups, "-o", "raw", t_path],
+                                   capture_output=True, timeout=15)
+                return r.returncode == 0
+            finally:
+                os.unlink(t_path)
+        return False
+
+    def disconnect(self):
+        pass
+
+
+class NetworkConn(BaseConn):
+    def __init__(self, cfg):
+        self.host = cfg["host"]
+        self.port = int(cfg.get("port", 9100))
+        self._s   = None
+
+    def connect(self):
+        try:
+            self._s = socket.create_connection((self.host, self.port), timeout=6)
+            return True
+        except Exception as e:
+            log.error(f"Network connect {self.host}:{self.port}: {e}")
+            return False
+
+    def send(self, data: bytes) -> bool:
+        try:
+            self._s.sendall(data); return True
+        except Exception as e:
+            log.error(f"Network send: {e}"); return False
+
+    def disconnect(self):
+        if self._s:
+            try: self._s.close()
+            except: pass
+
+
+class BluetoothConn(BaseConn):
+    def __init__(self, cfg):
+        self.mac     = cfg.get("mac_address", "")
+        self.channel = int(cfg.get("bt_channel", 1))
+        self._s      = None
+
+    def connect(self):
+        # Try rfcomm bind → open as file
+        try:
+            r = subprocess.run(
+                ["rfcomm", "bind", "/dev/rfcomm0", self.mac, str(self.channel)],
+                capture_output=True, timeout=10
+            )
+            if r.returncode != 0 and b"already" not in r.stderr:
+                raise RuntimeError(r.stderr.decode())
+            import time; time.sleep(0.6)
+            self._s = open("/dev/rfcomm0", "wb")
+            return True
+        except Exception as e:
+            log.error(f"Bluetooth connect: {e}")
+            return False
+
+    def send(self, data: bytes) -> bool:
+        try:
+            self._s.write(data); self._s.flush(); return True
+        except Exception as e:
+            log.error(f"BT send: {e}"); return False
+
+    def disconnect(self):
+        if self._s:
+            try: self._s.close()
+            except: pass
+        try:
+            subprocess.run(["rfcomm", "release", "/dev/rfcomm0"], timeout=5)
+        except: pass
+
+
+def make_connection(cfg) -> BaseConn:
+    t = cfg.get("type", "network")
+    if t == "usb":       return UsbConn(cfg)
+    if t == "bluetooth": return BluetoothConn(cfg)
+    return NetworkConn(cfg)
+
+
+# ─── PDF → ESC/POS ────────────────────────────────────────────────────────────
+
+def print_pdf(pdf_path: str, conn: BaseConn, width_px: int, paper_mm: int):
+    """Render each PDF page and send as ESC/POS raster."""
+    try:
+        from PIL import Image
+    except ImportError:
+        log.error("Pillow not installed. Run: pip3 install Pillow")
+        sys.exit(1)
+
+    # Get page count
+    r = subprocess.run(["pdfinfo", pdf_path], capture_output=True, text=True, timeout=10)
+    pages = 1
+    for line in r.stdout.splitlines():
+        if line.startswith("Pages:"):
+            try: pages = int(line.split(":")[1].strip())
+            except: pass
+
+    log.info(f"PDF has {pages} page(s), width_px={width_px}")
+
+    # Accumulate all ESC/POS bytes for the entire print job
+    job_bytes = bytearray()
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Render all pages to PNG via pdftoppm (203 DPI = standard thermal)
+        try:
+            subprocess.run([
+                "pdftoppm", "-r", "203", "-png", pdf_path,
+                os.path.join(tmpdir, "page")
+            ], check=True, capture_output=True, timeout=60)
+        except subprocess.CalledProcessError as e:
+            log.error(f"pdftoppm failed. stdout={e.stdout}, stderr={e.stderr}")
+            raise
+
+        # Sort rendered pages
+        files = sorted(f for f in os.listdir(tmpdir) if f.endswith(".png"))
+
+        for i, fname in enumerate(files):
+            log.info(f"  Processing Page {i+1}/{len(files)}: {fname}")
+            img_path = os.path.join(tmpdir, fname)
+            img = Image.open(img_path).convert("RGB")
+
+            # Crop whitespace (mirrors Android cropWhitespace)
+            img = crop_whitespace(img)
+
+            # Resize keeping aspect ratio to target width
+            orig_w, orig_h = img.size
+            scale = width_px / orig_w
+            new_h = max(1, int(orig_h * scale))
+            img = img.resize((width_px, new_h), Image.LANCZOS)
+
+            # Append printer INIT and center alignment for each page
+            job_bytes += bytes([0x1B, 0x40, 0x1B, 0x61, 0x01])
+
+            # Convert page to raster and append
+            raster = image_to_raster(img)
+            job_bytes += raster
+
+            # Feed a few lines after each page to separate them physically
+            job_bytes += bytes([0x0A, 0x0A])
+
+    # Send the entire accumulated job bytes in a single connection write
+    if len(job_bytes) > 0:
+        log.info(f"Sending entire print job ({len(job_bytes)} total ESC/POS bytes)...")
+        conn.send(bytes(job_bytes))
+        log.info("Print job sent successfully")
+
+
+def image_to_raster(img) -> bytes:
+    """PIL Image (already sized) → ESC/POS GS v 0 raster. Mirrors Android bitmapToRaster()."""
+    import struct
+    gray = img.convert("L")
+    pixels = list(gray.getdata())
+
+    w, h = gray.size
+    width_bytes = (w + 7) // 8
+
+    out = bytearray()
+    # GS v 0 header
+    out += bytes([0x1D, 0x76, 0x30, 0x00])
+    out += struct.pack("<H", width_bytes)
+    out += struct.pack("<H", h)
+
+    for y in range(h):
+        for bx in range(width_bytes):
+            byte_val = 0
+            for bit in range(8):
+                x = bx * 8 + bit
+                if x < w:
+                    lum = pixels[y * w + x]
+                    if lum < 128:
+                        byte_val |= (0x80 >> bit)
+            out.append(byte_val)
+
+    return bytes(out)
+
+
+def crop_whitespace(img, margin: int = 4):
+    """Crop white top/bottom/left/right margins."""
+    from PIL import Image
+    gray = img.convert("L")
+    w, h = gray.size
+    pixels = list(gray.getdata())
+
+    # Find top and bottom bounds
+    first_row = last_row = -1
+    for y in range(h):
+        row = pixels[y * w:(y + 1) * w]
+        if any(p < 240 for p in row):
+            first_row = y; break
+
+    if first_row < 0:
+        return img.crop((0, 0, w, 1))
+
+    for y in range(h - 1, first_row - 1, -1):
+        row = pixels[y * w:(y + 1) * w]
+        if any(p < 240 for p in row):
+            last_row = y; break
+
+    # Find left and right bounds
+    first_col = last_col = -1
+    for x in range(w):
+        col = [pixels[y * w + x] for y in range(h)]
+        if any(p < 240 for p in col):
+            first_col = x; break
+
+    if first_col < 0:
+        first_col = 0
+
+    for x in range(w - 1, first_col - 1, -1):
+        col = [pixels[y * w + x] for y in range(h)]
+        if any(p < 240 for p in col):
+            last_col = x; break
+
+    if last_col < 0:
+        last_col = w - 1
+
+    top    = max(0, first_row - margin)
+    bottom = min(h, last_row + margin + 1)
+    left   = max(0, first_col - margin)
+    right  = min(w, last_col + margin + 1)
+
+    return img.crop((left, top, right, bottom))
+
+
+def build_footer() -> bytes:
+    """
+    Company footer — mirrors Android sendCompanyFooter().
+    Prints a separator, bold company name, feeds paper, cuts.
+    """
+    esc = bytearray()
+    esc += bytes([0x1B, 0x40])        # INIT
+    esc += bytes([0x1B, 0x61, 0x01]) # CENTER
+    esc += b"\n"                      # blank line
+    esc += b"-" * 32 + b"\n"         # separator
+    esc += bytes([0x1B, 0x45, 0x01]) # BOLD ON
+    esc += b"Powered by- FFIT.IO\n"
+    esc += bytes([0x1B, 0x45, 0x00]) # BOLD OFF
+    esc += bytes([0x1B, 0x64, 0x03]) # FEED 3
+    esc += bytes([0x1D, 0x56, 0x00]) # CUT
+    return bytes(esc)
+
+
+if __name__ == "__main__":
+    main()

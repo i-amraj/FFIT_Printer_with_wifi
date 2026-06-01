@@ -1,0 +1,56 @@
+name: ffit_printer_ubuntu
+description: "FFit Thermal Printer Driver — Ubuntu Linux Desktop App"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: ^3.9.2
+
+# Dependencies specify other packages that your package needs in order to work.
+# To automatically upgrade your package dependencies to the latest versions
+# consider running `flutter pub upgrade --major-versions`. Alternatively,
+# dependencies can be manually updated by changing the version numbers below to
+# the latest version available on pub.dev. To see which dependencies have newer
+# versions available, run `flutter pub outdated`.
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # State management
+  provider: ^6.1.2
+
+  # Config / prefs storage
+  shared_preferences: ^2.3.3
+
+  # Path to config folder (~/.config/ffit/)
+  path_provider: ^2.1.4
+
+  # Run system commands (lp, cups, hcitool)
+  process_run: ^1.2.1
+
+  # Animations
+  flutter_animate: ^4.5.0
+
+  # Google Fonts (Inter)
+  google_fonts: ^6.2.1
+
+  # File picker (for future PDF selection)
+  file_picker: ^8.1.7
+
+  # URL launcher (open CUPS web UI)
+  url_launcher: ^6.3.1
+
+  # Network info (detect local IP for subnet scan)
+  network_info_plus: ^6.1.4
+  image: ^4.8.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/
