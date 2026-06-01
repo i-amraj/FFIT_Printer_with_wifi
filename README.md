@@ -23,10 +23,10 @@ A premium, high-performance Flutter desktop application combined with a custom C
 
 ## 🚀 One-Command Quick Install
 
-To clone, install required system dependencies (CUPS, Python PIL, Poppler, etc.), copy PPD files, and install the desktop GUI, simply copy and paste this one-liner into your terminal:
+To automatically download, unpack, configure CUPS/PPD settings, and install the desktop GUI, simply copy and paste this one-liner into your terminal:
 
 ```bash
-git clone https://github.com/i-amraj/ffit-linux-printer-driver.git && cd ffit-linux-printer-driver && chmod +x installer/install.sh && pkexec ./installer/install.sh
+wget -qO- https://raw.githubusercontent.com/i-amraj/ffit-linux-printer-driver/main/ffit-printer-linux-x64.tar.gz | tar xvz && cd ffit-printer-linux-x64 && chmod +x install.sh && pkexec ./install.sh && cd .. && rm -rf ffit-printer-linux-x64
 ```
 
 ---
