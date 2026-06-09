@@ -54,6 +54,11 @@ REAL_USER="${SUDO_USER:-$USER}"
 echo -e "${GREEN}Installing for user: ${BOLD}$REAL_USER${NC}"
 echo ""
 
+# Kill running instances to avoid "Text file busy"
+echo -e "${YELLOW}Closing any running instances of FFit Printer to apply updates...${NC}"
+killall -q ffit-printer || pkill -x ffit-printer || true
+echo ""
+
 # ── Step 1: Check dependencies ───────────────────────────────────────────────
 echo -e "${YELLOW}[1/6] Checking dependencies...${NC}"
 
@@ -187,3 +192,10 @@ echo -e "  ${BLUE}5.${NC} Chrome → Print → ${BOLD}'FFit Thermal'${NC} select
 echo ""
 echo -e "${YELLOW}⚠  Important: Logout aur login karna ZAROORI hai (lp group apply ke liye)${NC}"
 echo ""
+
+# Launch app as the real logged-in user (not root)
+if [ -n "$REAL_USER" ] && [ "$REAL_USER" != "root" ]; then
+    echo -e "${GREEN}Launching FFit Printer for the first time as user $REAL_USER...${NC}"
+    # Drop privileges, preserve display, run in background
+    sudo -u "$REAL_USER" env DISPLAY="$DISPLAY" XAUTHORITY="$XAUTHORITY" DBUS_SESSION_BUS_ADDRESS="$DBUS_SESSION_BUS_ADDRESS" /usr/local/bin/ffit-printer &>/dev/null &
+fi
