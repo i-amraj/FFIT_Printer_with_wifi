@@ -256,12 +256,21 @@ class NetworkConn(BaseConn):
         self._s   = None
 
     def connect(self):
-        try:
-            self._s = socket.create_connection((self.host, self.port), timeout=6)
-            return True
-        except Exception as e:
-            log.error(f"Network connect {self.host}:{self.port}: {e}")
-            return False
+        import time
+        retries = 3
+        for attempt in range(retries):
+            try:
+                log.info(f"Connecting to network printer {self.host}:{self.port} (attempt {attempt + 1}/{retries})...")
+                self._s = socket.create_connection((self.host, self.port), timeout=6)
+                # Optimize transmission speed for raw ESC/POS commands
+                self._s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                log.info("Connected to network printer successfully!")
+                return True
+            except Exception as e:
+                log.error(f"Network connect attempt {attempt + 1} failed: {e}")
+                if attempt < retries - 1:
+                    time.sleep(1.5)
+        return False
 
     def send(self, data: bytes) -> bool:
         try:
@@ -477,7 +486,8 @@ def build_footer() -> bytes:
     esc += bytes([0x1B, 0x45, 0x01]) # BOLD ON
     esc += b"Powered by- FFIT.IO\n"
     esc += bytes([0x1B, 0x45, 0x00]) # BOLD OFF
-    esc += bytes([0x1B, 0x64, 0x03]) # FEED 3
+    esc += b"\n\n"                    # extra spacing
+    esc += bytes([0x1B, 0x64, 0x0B]) # FEED 11
     esc += bytes([0x1D, 0x56, 0x00]) # CUT
     return bytes(esc)
 

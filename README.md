@@ -21,12 +21,30 @@ A premium, high-performance Flutter desktop application combined with a custom C
 
 ---
 
-## 🚀 One-Command Quick Install
+## 🚀 Quick Installation
 
-To automatically download, unpack, configure CUPS/PPD settings, and install the desktop GUI, simply copy and paste this one-liner into your terminal:
+### Option 1: One-Command Installation (Pre-built Release)
+If you want to install the pre-compiled production release directly on your machine without building from source, copy and paste this one-liner into your terminal:
 
 ```bash
-wget -qO- https://raw.githubusercontent.com/i-amraj/ffit-linux-printer-driver/main/ffit-printer-linux-x64.tar.gz | tar xvz && cd ffit-printer-linux-x64 && chmod +x install.sh && pkexec ./install.sh && cd .. && rm -rf ffit-printer-linux-x64
+wget -qO- https://github.com/i-amraj/ffit-linux-printer-driver/raw/main/ffit-printer-linux-x64.tar.gz | tar xvz && cd ffit-printer-linux-x64 && chmod +x install.sh && sudo ./install.sh && cd .. && rm -rf ffit-printer-linux-x64
+```
+
+### Option 2: Installation from Source (Development Mode)
+If you are developing or want to build from source:
+```bash
+# Clone the repository
+git clone https://github.com/i-amraj/ffit-linux-printer-driver.git
+cd ffit-linux-printer-driver
+
+# Build the Flutter GUI
+cd ffit_printer_ubuntu
+flutter build linux --release
+cd ..
+
+# Run the installer script
+chmod +x installer/install.sh
+sudo ./installer/install.sh
 ```
 
 ---

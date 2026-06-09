@@ -35,6 +35,9 @@ class PrinterProvider extends ChangeNotifier {
   List<DiscoveredPrinter> get netPrinters  => _netPrinters;
   List<DiscoveredPrinter> get btPrinters   => _btPrinters;
 
+  ActiveNetworkInfo? _activeNetInfo;
+  ActiveNetworkInfo? get activeNetInfo => _activeNetInfo;
+
   List<DiscoveredPrinter> get allPrinters =>
       [..._usbPrinters, ..._netPrinters, ..._btPrinters];
 
@@ -100,6 +103,48 @@ class PrinterProvider extends ChangeNotifier {
     }
   }
 
+  Future<void> fetchActiveNetworkInfo() async {
+    _activeNetInfo = await _discovery.getActiveNetworkInfo();
+    notifyListeners();
+  }
+
+  Future<void> scanCustomNetwork({
+    required String subnetPrefix,
+    required int port,
+    required int startIp,
+    required int endIp,
+  }) async {
+    _state = AppState.scanning;
+    _netPrinters = [];
+    _statusMessage = 'Scanning custom network...';
+    _hasError = false;
+    notifyListeners();
+
+    try {
+      final found = await _discovery.discoverNetwork(
+        subnetPrefix: subnetPrefix,
+        port: port,
+        startIp: startIp,
+        endIp: endIp,
+        onFound: (p) {
+          if (!_netPrinters.any((x) => x.address == p.address && x.port == p.port)) {
+            _netPrinters.add(p);
+            notifyListeners();
+          }
+        },
+      );
+      _netPrinters = found;
+      _statusMessage = '${found.length} network printer(s) found';
+      _state = AppState.idle;
+      notifyListeners();
+    } catch (e) {
+      _state = AppState.error;
+      _hasError = true;
+      _statusMessage = 'Network scan error: $e';
+      notifyListeners();
+    }
+  }
+
   Future<void> scanBluetooth() async {
     _state = AppState.scanning;
     _btPrinters = [];
@@ -142,12 +187,14 @@ class PrinterProvider extends ChangeNotifier {
         await _config.save(config);
         _statusMessage = 'Connected to ${config.name}';
         _state = AppState.idle;
+        notifyListeners();
+        await registerWithCups();
       } else {
         _statusMessage = 'Could not connect to ${config.name}';
         _hasError = true;
         _state = AppState.error;
+        notifyListeners();
       }
-      notifyListeners();
       return ok;
     } on Exception catch (e) {
       // Clean error message (strip "Exception: " prefix)
@@ -217,17 +264,37 @@ class PrinterProvider extends ChangeNotifier {
 
     try {
       final uri = _buildCupsUri(cfg);
+      
+      String queueName = 'FFit-Thermal';
+      switch (cfg.type) {
+        case ConnectionType.network:
+          queueName = 'ffit-wifi';
+          break;
+        case ConnectionType.bluetooth:
+          queueName = 'ffit-bt';
+          break;
+        case ConnectionType.usb:
+          queueName = 'ffit-port';
+          break;
+      }
+
+      // Remove the old hardcoded FFit-Thermal queue if it exists
+      await Process.run('lpadmin', ['-x', 'FFit-Thermal'], runInShell: true);
+
       final result = await Process.run('lpadmin', [
-        '-p', 'FFit-Thermal',
+        '-p', queueName,
         '-E',
         '-v', uri,
         '-P', '/usr/share/ppd/custom/pos58.ppd',
-        '-D', cfg.name,
-        '-L', 'FFit Thermal Printer',
+        '-D', '${cfg.name} (${cfg.typeLabel})',
+        '-L', cfg.displayAddress,
       ], runInShell: true);
 
       if (result.exitCode == 0) {
-        _statusMessage = 'CUPS printer "FFit-Thermal" registered ✅';
+        // Set this printer as the system default destination
+        await Process.run('lpoptions', ['-d', queueName], runInShell: true);
+
+        _statusMessage = 'CUPS printer "$queueName" registered ✅';
         notifyListeners();
         return true;
       } else {

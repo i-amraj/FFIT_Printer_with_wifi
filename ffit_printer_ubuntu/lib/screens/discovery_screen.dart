@@ -1,3 +1,4 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_animate/flutter_animate.dart';
 import 'package:provider/provider.dart';
@@ -18,6 +19,12 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
   late TabController _tabs;
   int _selectedTab = 0;
 
+  final _subnetController = TextEditingController();
+  final _portController = TextEditingController(text: '9100');
+  final _startIpController = TextEditingController(text: '1');
+  final _endIpController = TextEditingController(text: '254');
+  bool _showConfig = false;
+
   @override
   void initState() {
     super.initState();
@@ -28,13 +35,23 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
     });
     // Auto scan USB + Network on open
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      context.read<PrinterProvider>().scanAll();
+      final p = context.read<PrinterProvider>();
+      p.scanAll();
+      p.fetchActiveNetworkInfo().then((_) {
+        if (p.activeNetInfo != null) {
+          _subnetController.text = p.activeNetInfo!.subnetPrefix;
+        }
+      });
     });
   }
 
   @override
   void dispose() {
     _tabs.dispose();
+    _subnetController.dispose();
+    _portController.dispose();
+    _startIpController.dispose();
+    _endIpController.dispose();
     super.dispose();
   }
 
@@ -148,7 +165,7 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
           controller: _tabs,
           children: [
             _buildList(provider.usbPrinters, ConnectionType.usb, provider),
-            _buildList(provider.netPrinters, ConnectionType.network, provider),
+            _buildNetTab(provider),
             _buildBtTab(provider),
           ],
         );
@@ -175,9 +192,424 @@ class _DiscoveryScreenState extends State<DiscoveryScreen>
         return PrinterTile(
           printer:   p,
           onConnect: () => _connect(p, provider),
-          // Non-printer tap: show "not a printer" dialog from screen
           onNotPrinter: p.isSelectable ? null : () => _showNotPrinterDialog(p),
         ).animate().fadeIn(delay: (i * 50).ms).slideX(begin: 0.1, end: 0);
+      },
+    );
+  }
+
+  Widget _buildNetTab(PrinterProvider provider) {
+    final active = provider.activeNetInfo;
+
+    return Column(
+      children: [
+        // Active Network Banner
+        if (active != null)
+          Container(
+            margin: const EdgeInsets.fromLTRB(16, 12, 16, 0),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            decoration: BoxDecoration(
+              color: FFitTheme.netColor.withOpacity(0.08),
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: FFitTheme.netColor.withOpacity(0.2)),
+            ),
+            child: Row(
+              children: [
+                Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: FFitTheme.netColor.withOpacity(0.15),
+                    shape: BoxShape.circle,
+                  ),
+                  child: const Icon(Icons.wifi_tethering_rounded,
+                      color: FFitTheme.netColor, size: 20),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'Interface: ${active.interfaceName}',
+                        style: const TextStyle(
+                          color: FFitTheme.textPrimary,
+                          fontWeight: FontWeight.w600,
+                          fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        'IP: ${active.ipAddress} | Subnet: ${active.subnetPrefix}.0',
+                        style: const TextStyle(
+                          color: FFitTheme.textSub,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ).animate().fadeIn().slideY(begin: -0.1),
+
+        // Controls: Config Toggle + Manual IP
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
+          child: Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    foregroundColor: FFitTheme.textPrimary,
+                    side: BorderSide(color: FFitTheme.border),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  icon: Icon(
+                    _showConfig ? Icons.expand_less_rounded : Icons.tune_rounded,
+                    size: 16,
+                    color: FFitTheme.netColor,
+                  ),
+                  label: Text(
+                    _showConfig ? 'Hide Config' : 'Scanner Config',
+                    style: const TextStyle(fontSize: 12),
+                  ),
+                  onPressed: () {
+                    setState(() => _showConfig = !_showConfig);
+                  },
+                ),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: ElevatedButton.icon(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: FFitTheme.netColor,
+                    foregroundColor: Colors.white,
+                    elevation: 0,
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                  icon: const Icon(Icons.add_link_rounded, size: 16),
+                  label: const Text('Manual IP', style: TextStyle(fontSize: 12)),
+                  onPressed: () => _showManualIpDialog(provider),
+                ),
+              ),
+            ],
+          ),
+        ),
+
+        // Collapsible Scanner settings form
+        if (_showConfig)
+          Container(
+            margin: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            padding: const EdgeInsets.all(16),
+            decoration: BoxDecoration(
+              color: FFitTheme.surface,
+              borderRadius: BorderRadius.circular(16),
+              border: Border.all(color: FFitTheme.border),
+            ),
+            child: Column(
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      flex: 2,
+                      child: TextField(
+                        controller: _subnetController,
+                        style: const TextStyle(color: FFitTheme.textPrimary, fontSize: 13),
+                        decoration: const InputDecoration(
+                          labelText: 'Subnet Prefix',
+                          labelStyle: TextStyle(color: FFitTheme.textSub, fontSize: 11),
+                          hintText: '192.168.1',
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextField(
+                        controller: _portController,
+                        keyboardType: TextInputType.number,
+                        style: const TextStyle(color: FFitTheme.textPrimary, fontSize: 13),
+                        decoration: const InputDecoration(
+                          labelText: 'Port',
+                          labelStyle: TextStyle(color: FFitTheme.textSub, fontSize: 11),
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Row(
+                  children: [
+                    Expanded(
+                      child: TextField(
+                        controller: _startIpController,
+                        keyboardType: TextInputType.number,
+                        style: const TextStyle(color: FFitTheme.textPrimary, fontSize: 13),
+                        decoration: const InputDecoration(
+                          labelText: 'Start IP',
+                          labelStyle: TextStyle(color: FFitTheme.textSub, fontSize: 11),
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: TextField(
+                        controller: _endIpController,
+                        keyboardType: TextInputType.number,
+                        style: const TextStyle(color: FFitTheme.textPrimary, fontSize: 13),
+                        decoration: const InputDecoration(
+                          labelText: 'End IP',
+                          labelStyle: TextStyle(color: FFitTheme.textSub, fontSize: 11),
+                          isDense: true,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: FFitTheme.netColor,
+                      foregroundColor: Colors.white,
+                    ),
+                    icon: const Icon(Icons.search_rounded, size: 16),
+                    label: const Text('Custom Subnet Scan'),
+                    onPressed: () {
+                      final prefix = _subnetController.text.trim();
+                      final port = int.tryParse(_portController.text.trim()) ?? 9100;
+                      final start = int.tryParse(_startIpController.text.trim()) ?? 1;
+                      final end = int.tryParse(_endIpController.text.trim()) ?? 254;
+
+                      if (prefix.isNotEmpty) {
+                        provider.scanCustomNetwork(
+                          subnetPrefix: prefix,
+                          port: port,
+                          startIp: start,
+                          endIp: end,
+                        );
+                      }
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ).animate().fadeIn().slideY(begin: -0.05),
+
+        // Results List
+        Expanded(
+          child: _buildList(provider.netPrinters, ConnectionType.network, provider),
+        ),
+      ],
+    );
+  }
+
+  void _showManualIpDialog(PrinterProvider provider) {
+    final nameController = TextEditingController(text: 'ffit-wifi');
+    final ipController = TextEditingController();
+    final portController = TextEditingController(text: '9100');
+    final subnetController = TextEditingController(text: '255.255.255.0');
+    final formKey = GlobalKey<FormState>();
+    bool loading = false;
+
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setState) {
+            return AlertDialog(
+              backgroundColor: FFitTheme.surface,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
+              ),
+              title: Row(
+                children: [
+                  Container(
+                    width: 36, height: 36,
+                    decoration: BoxDecoration(
+                      color: FFitTheme.netColor.withValues(alpha: 0.15),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.wifi_rounded,
+                        color: FFitTheme.netColor, size: 20),
+                  ),
+                  const SizedBox(width: 12),
+                  const Text('Manual WiFi Printer'),
+                ],
+              ),
+              content: Form(
+                key: formKey,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      TextFormField(
+                        controller: nameController,
+                        style: const TextStyle(color: FFitTheme.textPrimary),
+                        decoration: const InputDecoration(
+                          labelText: 'Printer Name',
+                          labelStyle: TextStyle(color: FFitTheme.textSub),
+                          focusedBorder: UnderlineInputBorder(
+                            borderSide: BorderSide(color: FFitTheme.netColor),
+                          ),
+                        ),
+                        validator: (v) => v == null || v.trim().isEmpty
+                            ? 'Name is required'
+                            : null,
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: ipController,
+                        style: const TextStyle(color: FFitTheme.textPrimary),
+                        decoration: const InputDecoration(
+                          labelText: 'IP Address (e.g. 192.168.1.100)',
+                          labelStyle: TextStyle(color: FFitTheme.textSub),
+                          focusedBorder: UnderlineInputBorder(
+                            borderSide: BorderSide(color: FFitTheme.netColor),
+                          ),
+                        ),
+                        validator: (v) {
+                          if (v == null || v.trim().isEmpty) {
+                            return 'IP Address is required';
+                          }
+                          final clean = v.trim();
+                          final regex = RegExp(
+                              r'^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$');
+                          if (!regex.hasMatch(clean)) {
+                            return 'Enter a valid IP address';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: subnetController,
+                        style: const TextStyle(color: FFitTheme.textPrimary),
+                        decoration: const InputDecoration(
+                          labelText: 'Subnet Mask (e.g. 255.255.255.0)',
+                          labelStyle: TextStyle(color: FFitTheme.textSub),
+                          focusedBorder: UnderlineInputBorder(
+                            borderSide: BorderSide(color: FFitTheme.netColor),
+                          ),
+                        ),
+                        validator: (v) {
+                          if (v == null || v.trim().isEmpty) {
+                            return 'Subnet Mask is required';
+                          }
+                          final clean = v.trim();
+                          final regex = RegExp(
+                              r'^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$');
+                          if (!regex.hasMatch(clean)) {
+                            return 'Enter a valid Subnet Mask';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 12),
+                      TextFormField(
+                        controller: portController,
+                        style: const TextStyle(color: FFitTheme.textPrimary),
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Port (usually 9100)',
+                          labelStyle: TextStyle(color: FFitTheme.textSub),
+                          focusedBorder: UnderlineInputBorder(
+                            borderSide: BorderSide(color: FFitTheme.netColor),
+                          ),
+                        ),
+                        validator: (v) {
+                          if (v == null || v.trim().isEmpty) {
+                            return 'Port is required';
+                          }
+                          final port = int.tryParse(v.trim());
+                          if (port == null || port <= 0 || port > 65535) {
+                            return 'Enter a valid port (1-65535)';
+                          }
+                          return null;
+                        },
+                      ),
+                      if (loading) ...[
+                        const SizedBox(height: 20),
+                        const LinearProgressIndicator(color: FFitTheme.netColor),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: loading ? null : () => Navigator.pop(dialogContext),
+                  child: const Text('Cancel', style: TextStyle(color: FFitTheme.textSub)),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: FFitTheme.netColor,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: loading
+                      ? null
+                      : () async {
+                          if (!formKey.currentState!.validate()) return;
+                          setState(() => loading = true);
+
+                          final name = nameController.text.trim();
+                          final ip = ipController.text.trim();
+                          final port = int.parse(portController.text.trim());
+                          final subnet = subnetController.text.trim();
+
+                          // Probe connection
+                          try {
+                            final socket = await Socket.connect(
+                              ip,
+                              port,
+                              timeout: const Duration(seconds: 8),
+                            );
+                            socket.destroy();
+
+                            // Probing success - connect and close dialog
+                            final mockPrinter = DiscoveredPrinter(
+                              type: ConnectionType.network,
+                              name: name,
+                              address: ip,
+                              port: port,
+                              subnetMask: subnet,
+                            );
+
+                            if (context.mounted) {
+                              Navigator.pop(dialogContext);
+                              _connect(mockPrinter, provider);
+                            }
+                          } catch (e, stack) {
+                            debugPrint('❌ Probe connection failed to $ip:$port : $e');
+                            debugPrint('$stack');
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  content: Text('❌ Connection failed: $e'),
+                                  backgroundColor: FFitTheme.errorGlow,
+                                ),
+                              );
+                            }
+                          } finally {
+                            if (context.mounted) {
+                              setState(() => loading = false);
+                            }
+                          }
+                        },
+                  child: const Text('Connect'),
+                ),
+              ],
+            );
+          },
+        );
       },
     );
   }

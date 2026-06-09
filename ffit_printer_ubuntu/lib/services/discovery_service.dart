@@ -67,7 +67,33 @@ class DiscoveryService {
 
   // ─── Network Discovery ──────────────────────────────────────────────────
 
+  Future<ActiveNetworkInfo?> getActiveNetworkInfo() async {
+    try {
+      final interfaces = await NetworkInterface.list();
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
+            final parts = addr.address.split('.');
+            if (parts.length == 4) {
+              final prefix = '${parts[0]}.${parts[1]}.${parts[2]}';
+              return ActiveNetworkInfo(
+                interfaceName: iface.name,
+                ipAddress: addr.address,
+                subnetPrefix: prefix,
+              );
+            }
+          }
+        }
+      }
+    } catch (_) {}
+    return null;
+  }
+
   Future<List<DiscoveredPrinter>> discoverNetwork({
+    String? subnetPrefix,
+    int? port,
+    int? startIp,
+    int? endIp,
     void Function(DiscoveredPrinter)? onFound,
   }) async {
     final results = <DiscoveredPrinter>[];
@@ -83,13 +109,17 @@ class DiscoveryService {
         final parts = line.split(';');
         if (parts.length >= 9 && parts[0] == '=') {
           final host  = parts[6];
-          final port  = int.tryParse(parts[8]) ?? 9100;
+          final pPort  = int.tryParse(parts[8]) ?? 9100;
           final name  = parts[3].isNotEmpty ? parts[3] : host;
+
+          if (port != null && pPort != port) continue;
+          if (subnetPrefix != null && !host.startsWith(subnetPrefix)) continue;
+
           final p = DiscoveredPrinter(
             type: ConnectionType.network,
             name: name,
             address: host,
-            port: port,
+            port: pPort,
           );
           results.add(p);
           onFound?.call(p);
@@ -97,70 +127,96 @@ class DiscoveryService {
       }
     } catch (_) {}
 
-    // 2. Subnet scan for port 9100
-    if (results.isEmpty) {
-      final found = await _scanSubnet9100(onFound: onFound);
-      results.addAll(found);
+    // 2. Subnet scan
+    if (results.isEmpty || subnetPrefix != null) {
+      final found = await _scanSubnet9100(
+        subnetPrefix: subnetPrefix,
+        port: port ?? 9100,
+        startIp: startIp ?? 1,
+        endIp: endIp ?? 254,
+        onFound: onFound,
+      );
+      for (final p in found) {
+        if (!results.any((x) => x.address == p.address && x.port == p.port)) {
+          results.add(p);
+        }
+      }
     }
 
     return results;
   }
 
   Future<List<DiscoveredPrinter>> _scanSubnet9100({
+    String? subnetPrefix,
+    required int port,
+    required int startIp,
+    required int endIp,
     void Function(DiscoveredPrinter)? onFound,
   }) async {
     final results = <DiscoveredPrinter>[];
 
-    // Detect local IP
-    String? localIp;
-    try {
-      final interfaces = await NetworkInterface.list();
-      for (final iface in interfaces) {
-        for (final addr in iface.addresses) {
-          if (addr.type == InternetAddressType.IPv4 &&
-              !addr.isLoopback &&
-              addr.address.startsWith('192.168')) {
-            localIp = addr.address;
-            break;
+    String? subnet = subnetPrefix;
+    if (subnet == null) {
+      // Detect local IP
+      String? localIp;
+      try {
+        final interfaces = await NetworkInterface.list();
+        final candidates = <String>[];
+        for (final iface in interfaces) {
+          for (final addr in iface.addresses) {
+            if (addr.type == InternetAddressType.IPv4 && !addr.isLoopback) {
+              candidates.add(addr.address);
+            }
           }
         }
-        if (localIp != null) break;
+        if (candidates.isNotEmpty) {
+          // Find private IP address first
+          localIp = candidates.firstWhere(
+            (ip) => ip.startsWith('192.168.') || ip.startsWith('10.') || ip.startsWith('172.'),
+            orElse: () => candidates.first,
+          );
+        }
+      } catch (_) {}
+
+      if (localIp != null) {
+        final parts = localIp.split('.');
+        if (parts.length >= 3) {
+          subnet = '${parts[0]}.${parts[1]}.${parts[2]}';
+        }
       }
-    } catch (_) {}
-
-    if (localIp == null) return results;
-
-    // Extract subnet prefix (e.g. 192.168.1)
-    final parts = localIp.split('.');
-    if (parts.length < 3) return results;
-    final subnet = '${parts[0]}.${parts[1]}.${parts[2]}';
-
-    // Parallel TCP probe of .1 to .254 on port 9100
-    final futures = <Future>[];
-    final lock = <DiscoveredPrinter>[];
-
-    for (int i = 1; i <= 254; i++) {
-      final ip = '$subnet.$i';
-      futures.add(() async {
-        try {
-          final s = await Socket.connect(
-            ip, 9100,
-            timeout: const Duration(milliseconds: 600),
-          );
-          s.destroy();
-          final p = DiscoveredPrinter(
-            type:    ConnectionType.network,
-            name:    'Thermal Printer @ $ip',
-            address: ip,
-            port:    9100,
-          );
-          lock.add(p);
-          onFound?.call(p);
-        } catch (_) {}
-      }());
     }
 
-    await Future.wait(futures);
+    if (subnet == null) return results;
+
+    final lock = <DiscoveredPrinter>[];
+    
+    // Chunked parallel TCP probe of startIp to endIp on user configured port
+    const chunkCount = 32;
+    for (int chunk = startIp - 1; chunk < endIp; chunk += chunkCount) {
+      final chunkFutures = <Future>[];
+      for (int i = chunk + 1; i <= chunk + chunkCount && i <= endIp && i <= 254; i++) {
+        final ip = '$subnet.$i';
+        chunkFutures.add(() async {
+          try {
+            final s = await Socket.connect(
+              ip, port,
+              timeout: const Duration(milliseconds: 500),
+            );
+            s.destroy();
+            final p = DiscoveredPrinter(
+              type:    ConnectionType.network,
+              name:    'Thermal Printer @ $ip',
+              address: ip,
+              port:    port,
+            );
+            lock.add(p);
+            onFound?.call(p);
+          } catch (_) {}
+        }());
+      }
+      await Future.wait(chunkFutures);
+    }
+
     results.addAll(lock);
     return results;
   }
@@ -249,4 +305,16 @@ class DiscoveryService {
       return false;
     }
   }
+}
+
+class ActiveNetworkInfo {
+  final String interfaceName;
+  final String ipAddress;
+  final String subnetPrefix;
+
+  const ActiveNetworkInfo({
+    required this.interfaceName,
+    required this.ipAddress,
+    required this.subnetPrefix,
+  });
 }

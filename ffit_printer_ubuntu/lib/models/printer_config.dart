@@ -16,6 +16,7 @@ class PrinterConfig {
   // Network
   final String? host;         // IP address
   final int port;             // default 9100
+  final String? subnetMask;   // Subnet mask
 
   // Bluetooth
   final String? macAddress;   // e.g. 00:11:22:33:44:55
@@ -31,6 +32,7 @@ class PrinterConfig {
     this.cupsName,
     this.host,
     this.port = 9100,
+    this.subnetMask = '255.255.255.0',
     this.macAddress,
     this.btChannel = 1,
     this.paperWidth = PaperWidth.mm58,
@@ -65,6 +67,7 @@ class PrinterConfig {
     'cups_name':   cupsName,
     'host':        host,
     'port':        port,
+    'subnet_mask': subnetMask,
     'mac_address': macAddress,
     'bt_channel':  btChannel,
     'paper_width': paperWidth.name,
@@ -79,6 +82,7 @@ class PrinterConfig {
     cupsName:    j['cups_name'],
     host:        j['host'],
     port:        j['port'] ?? 9100,
+    subnetMask:  j['subnet_mask'] ?? '255.255.255.0',
     macAddress:  j['mac_address'],
     btChannel:   j['bt_channel'] ?? 1,
     paperWidth:  PaperWidth.values.firstWhere(
@@ -93,6 +97,7 @@ class PrinterConfig {
     String? cupsName,
     String? host,
     int? port,
+    String? subnetMask,
     String? macAddress,
     int? btChannel,
     PaperWidth? paperWidth,
@@ -104,6 +109,7 @@ class PrinterConfig {
         cupsName:    cupsName    ?? this.cupsName,
         host:        host        ?? this.host,
         port:        port        ?? this.port,
+        subnetMask:  subnetMask  ?? this.subnetMask,
         macAddress:  macAddress  ?? this.macAddress,
         btChannel:   btChannel   ?? this.btChannel,
         paperWidth:  paperWidth  ?? this.paperWidth,
@@ -117,6 +123,7 @@ class DiscoveredPrinter {
   final String address;   // IP, MAC, or /dev/usb/lp*
   final String? cupsName; // CUPS queue name (if from CUPS)
   final int port;
+  final String? subnetMask;
   final bool likelyPrinter;
   final bool writable;    // false = permission denied
 
@@ -126,6 +133,7 @@ class DiscoveredPrinter {
     required this.address,
     this.cupsName,
     this.port = 9100,
+    this.subnetMask = '255.255.255.0',
     this.likelyPrinter = true,
     this.writable = true,
   });
@@ -156,13 +164,21 @@ class DiscoveredPrinter {
     }
   }
 
-  PrinterConfig toConfig() => PrinterConfig(
-    type:       type,
-    name:       name,
-    devicePath: (type == ConnectionType.usb && cupsName == null) ? address : null,
-    cupsName:   cupsName,
-    host:       type == ConnectionType.network ? address : null,
-    port:       port,
-    macAddress: type == ConnectionType.bluetooth ? address : null,
-  );
+  PrinterConfig toConfig() {
+    final defaultName = type == ConnectionType.network
+        ? 'ffit-wifi'
+        : type == ConnectionType.bluetooth
+            ? 'ffit-bt'
+            : 'ffit-port';
+    return PrinterConfig(
+      type:       type,
+      name:       defaultName,
+      devicePath: (type == ConnectionType.usb && cupsName == null) ? address : null,
+      cupsName:   cupsName ?? defaultName,
+      host:       type == ConnectionType.network ? address : null,
+      port:       port,
+      subnetMask: subnetMask,
+      macAddress: type == ConnectionType.bluetooth ? address : null,
+    );
+  }
 }
