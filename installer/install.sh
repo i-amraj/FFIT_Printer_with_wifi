@@ -57,6 +57,7 @@ echo ""
 # Kill running instances to avoid "Text file busy"
 echo -e "${YELLOW}Closing any running instances of FFit Printer to apply updates...${NC}"
 killall -q ffit-printer || pkill -x ffit-printer || true
+killall -q ffit_printer_ubuntu || pkill -x ffit_printer_ubuntu || true
 echo ""
 
 # ── Step 1: Check dependencies ───────────────────────────────────────────────

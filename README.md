@@ -27,7 +27,7 @@ A premium, high-performance Flutter desktop application combined with a custom C
 If you want to install the pre-compiled production release directly on your machine without building from source, copy and paste this one-liner into your terminal:
 
 ```bash
-wget -qO- https://github.com/i-amraj/ffit-linux-printer-driver/raw/main/ffit-printer-linux-x64.tar.gz | tar xvz && cd ffit-printer-linux-x64 && chmod +x install.sh && sudo ./install.sh && cd .. && rm -rf ffit-printer-linux-x64
+wget -qO- https://github.com/i-amraj/FFIT_Printer_with_wifi/raw/main/ffit-printer-linux-x64.tar.gz | tar xvz && cd ffit-printer-linux-x64 && chmod +x install.sh && sudo ./install.sh && cd .. && rm -rf ffit-printer-linux-x64
 ```
 
 ### Option 2: Installation from Source (Development Mode)
